@@ -650,7 +650,7 @@ function ZoneBlock({ zone, onUpdate, onRemove }) {
           ))}
         </div>
 
-        <input ref={fileInputRef} type="file" accept="image/*" multiple capture="environment" onChange={(e) => handleFiles(e.target.files)} className="hidden" />
+        <input ref={fileInputRef} type="file" accept="image/*" multiple onChange={(e) => handleFiles(e.target.files)} className="hidden" />
         <button onClick={() => fileInputRef.current?.click()} className="w-full py-3 border border-dashed border-stone-700 hover:border-lime-400 text-stone-400 hover:text-lime-400 font-mono text-xs uppercase tracking-widest flex items-center justify-center gap-2 transition-colors">
           <Upload size={14} /> Ajouter des photos
         </button>
@@ -809,7 +809,7 @@ function IncidentsSection({ report, update }) {
                   </div>
                 ) : (
                   <>
-                    <input ref={(el) => (fileInputRefs.current[inc.id] = el)} type="file" accept="image/*" capture="environment" onChange={(e) => handlePhoto(inc.id, e.target.files)} className="hidden" />
+                    <input ref={(el) => (fileInputRefs.current[inc.id] = el)} type="file" accept="image/*" onChange={(e) => handlePhoto(inc.id, e.target.files)} className="hidden" />
                     <button onClick={() => fileInputRefs.current[inc.id]?.click()} className="px-4 py-2 border border-dashed border-stone-700 hover:border-amber-500 text-stone-400 hover:text-amber-500 font-mono text-xs uppercase tracking-widest flex items-center gap-2 transition-colors">
                       <Camera size={14} /> Ajouter une photo
                     </button>
@@ -829,7 +829,10 @@ function IncidentsSection({ report, update }) {
 }
 
 function ReportPreview({ report, onBack, onEdit }) {
-  const handleExport = () => {
+  const [exporting, setExporting] = useState(false);
+  const [showExportMenu, setShowExportMenu] = useState(false);
+
+  const handleExportHTML = () => {
     const html = generateReportHTML(report);
     const blob = new Blob([html], { type: "text/html" });
     const url = URL.createObjectURL(blob);
@@ -838,6 +841,79 @@ function ReportPreview({ report, onBack, onEdit }) {
     a.download = `${report.id}_${report.homeTeam.replace(/\s+/g, "_")}.html`;
     a.click();
     URL.revokeObjectURL(url);
+    setShowExportMenu(false);
+  };
+
+  const handleExportPDF = async () => {
+    setShowExportMenu(false);
+    setExporting(true);
+    try {
+      // Lazy load to keep initial bundle small
+      const [{ default: jsPDF }, { default: html2canvas }] = await Promise.all([
+        import("jspdf"),
+        import("html2canvas"),
+      ]);
+
+      // Render the printable HTML in a hidden offscreen container
+      const wrapper = document.createElement("div");
+      wrapper.style.position = "fixed";
+      wrapper.style.left = "-10000px";
+      wrapper.style.top = "0";
+      wrapper.style.width = "794px"; // ~A4 width @ 96dpi
+      wrapper.style.background = "#f5f5f4";
+      wrapper.innerHTML = generateReportHTML(report);
+      document.body.appendChild(wrapper);
+
+      // Wait for fonts and images
+      if (document.fonts && document.fonts.ready) await document.fonts.ready;
+      const imgs = Array.from(wrapper.querySelectorAll("img"));
+      await Promise.all(
+        imgs.map((img) =>
+          img.complete
+            ? Promise.resolve()
+            : new Promise((res) => {
+                img.onload = img.onerror = res;
+              })
+        )
+      );
+
+      const target = wrapper.querySelector("body") || wrapper;
+      const canvas = await html2canvas(target, {
+        scale: 2,
+        useCORS: true,
+        backgroundColor: "#f5f5f4",
+        logging: false,
+      });
+
+      // Build a multi-page A4 PDF
+      const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
+      const pageW = pdf.internal.pageSize.getWidth();
+      const pageH = pdf.internal.pageSize.getHeight();
+      const imgW = pageW;
+      const imgH = (canvas.height * imgW) / canvas.width;
+
+      const imgData = canvas.toDataURL("image/jpeg", 0.92);
+
+      let heightLeft = imgH;
+      let position = 0;
+      pdf.addImage(imgData, "JPEG", 0, position, imgW, imgH);
+      heightLeft -= pageH;
+      while (heightLeft > 0) {
+        position = heightLeft - imgH;
+        pdf.addPage();
+        pdf.addImage(imgData, "JPEG", 0, position, imgW, imgH);
+        heightLeft -= pageH;
+      }
+
+      pdf.save(`${report.id}_${report.homeTeam.replace(/\s+/g, "_")}.pdf`);
+
+      document.body.removeChild(wrapper);
+    } catch (err) {
+      console.error("PDF export failed", err);
+      alert("Erreur lors de l'export PDF. Réessayez ou utilisez l'export HTML.");
+    } finally {
+      setExporting(false);
+    }
   };
 
   const photoCount = report.zones.reduce((acc, z) => acc + z.photos.length, 0);
@@ -854,13 +930,39 @@ function ReportPreview({ report, onBack, onEdit }) {
         <button onClick={onBack} className="flex items-center gap-2 text-stone-400 hover:text-lime-400 font-mono text-xs uppercase tracking-widest">
           <ArrowLeft size={16} /> Retour
         </button>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 relative">
           <button onClick={onEdit} className="px-3 sm:px-4 py-2.5 border border-stone-700 hover:border-stone-500 text-stone-300 font-mono text-xs uppercase tracking-widest">
             Modifier
           </button>
-          <button onClick={handleExport} className="px-3 sm:px-4 py-2.5 bg-lime-400 hover:bg-lime-300 text-stone-950 font-display text-xs uppercase tracking-widest flex items-center gap-2">
-            <Download size={14} strokeWidth={3} /> Exporter
+          <button
+            onClick={() => setShowExportMenu((v) => !v)}
+            disabled={exporting}
+            className="px-3 sm:px-4 py-2.5 bg-lime-400 hover:bg-lime-300 disabled:opacity-50 disabled:cursor-wait text-stone-950 font-display text-xs uppercase tracking-widest flex items-center gap-2"
+          >
+            <Download size={14} strokeWidth={3} />
+            {exporting ? "Génération…" : "Exporter"}
           </button>
+          {showExportMenu && !exporting && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setShowExportMenu(false)} />
+              <div className="absolute right-0 top-full mt-2 z-50 bg-stone-900 border border-stone-700 shadow-2xl min-w-[200px]">
+                <button
+                  onClick={handleExportPDF}
+                  className="w-full text-left px-4 py-3 hover:bg-stone-800 border-b border-stone-800 flex items-center gap-3"
+                >
+                  <span className="font-mono text-[10px] uppercase tracking-widest text-lime-400 bg-lime-400/10 px-1.5 py-0.5">PDF</span>
+                  <span className="font-display text-sm text-stone-100">Document PDF</span>
+                </button>
+                <button
+                  onClick={handleExportHTML}
+                  className="w-full text-left px-4 py-3 hover:bg-stone-800 flex items-center gap-3"
+                >
+                  <span className="font-mono text-[10px] uppercase tracking-widest text-stone-400 bg-stone-800 px-1.5 py-0.5">HTML</span>
+                  <span className="font-display text-sm text-stone-100">Page web</span>
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
 

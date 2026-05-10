@@ -2,6 +2,15 @@
 
 Application de reporting pour les opérateurs signalétique en stade de rugby.
 
+## ✨ Fonctionnalités
+
+- 📋 5 sections de saisie (en-tête, synthèse, photos, logistique, incidents)
+- 🖼️ Photos sélectionnées depuis la **bibliothèque/galerie** du téléphone, organisées par zones, avec commentaires
+- 📦 Inventaire éditable (provenance, quantité, état)
+- ⚠️ Gestion des incidents avec photo de preuve et niveau de sévérité
+- 📄 Export du rapport en **PDF** ou en **HTML**
+- 💾 Sauvegarde automatique dans le navigateur (`localStorage`)
+
 ## 🚀 Déploiement sur Vercel (méthode la plus simple)
 
 ### Option A — Déploiement via GitHub (recommandé, ~10 min)
