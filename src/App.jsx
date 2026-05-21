@@ -32,10 +32,7 @@ const EMPTY_REPORT = () => ({
     { id: "A", name: "Bord terrain (Visibilité TV & Stades)", photos: [] },
     { id: "B", name: "Accès & Flux Spectateurs", photos: [] },
   ],
-  inventory: [
-    { id: 1, item: "Bâches 10 m x 1 m", source: "Stock", qty: 4, state: "Bon état" },
-    { id: 2, item: "Bâches 3 m x 1 m", source: "Stock", qty: 2, state: "Bon état" },
-  ],
+  inventory: [],
   incidents: [],
 });
 
