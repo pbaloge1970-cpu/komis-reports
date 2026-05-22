@@ -851,12 +851,14 @@ function ReportPreview({ report, onBack, onEdit }) {
         import("html2canvas"),
       ]);
 
+      const RENDER_W = 794; // px, ~A4 width @ 96dpi
+
       // Render the printable HTML in a hidden offscreen container
       const wrapper = document.createElement("div");
       wrapper.style.position = "fixed";
       wrapper.style.left = "-10000px";
       wrapper.style.top = "0";
-      wrapper.style.width = "794px"; // ~A4 width @ 96dpi
+      wrapper.style.width = RENDER_W + "px";
       wrapper.style.background = "#f5f5f4";
       wrapper.innerHTML = generateReportHTML(report);
       document.body.appendChild(wrapper);
@@ -874,32 +876,85 @@ function ReportPreview({ report, onBack, onEdit }) {
         )
       );
 
-      const target = wrapper.querySelector("body") || wrapper;
-      const canvas = await html2canvas(target, {
-        scale: 2,
-        useCORS: true,
-        backgroundColor: "#f5f5f4",
-        logging: false,
-      });
-
-      // Build a multi-page A4 PDF
+      // PDF setup (A4 portrait)
       const pdf = new jsPDF({ unit: "mm", format: "a4", orientation: "portrait" });
-      const pageW = pdf.internal.pageSize.getWidth();
-      const pageH = pdf.internal.pageSize.getHeight();
-      const imgW = pageW;
-      const imgH = (canvas.height * imgW) / canvas.width;
+      const pageW = pdf.internal.pageSize.getWidth();   // 210
+      const pageH = pdf.internal.pageSize.getHeight();  // 297
+      const margin = 10;                                // mm
+      const contentW = pageW - margin * 2;
+      const usableH = pageH - margin * 2;
+      const pxToMm = contentW / RENDER_W;               // scale: px -> mm
 
-      const imgData = canvas.toDataURL("image/jpeg", 0.92);
+      const SCALE = 2; // html2canvas oversampling for sharpness
 
-      let heightLeft = imgH;
-      let position = 0;
-      pdf.addImage(imgData, "JPEG", 0, position, imgW, imgH);
-      heightLeft -= pageH;
-      while (heightLeft > 0) {
-        position = heightLeft - imgH;
-        pdf.addPage();
-        pdf.addImage(imgData, "JPEG", 0, position, imgW, imgH);
-        heightLeft -= pageH;
+      // Capture one DOM element to a JPEG + its size in mm
+      const captureBlock = async (el) => {
+        const canvas = await html2canvas(el, {
+          scale: SCALE,
+          useCORS: true,
+          backgroundColor: "#f5f5f4",
+          logging: false,
+        });
+        return {
+          data: canvas.toDataURL("image/jpeg", 0.92),
+          wMm: (canvas.width / SCALE) * pxToMm,
+          hMm: (canvas.height / SCALE) * pxToMm,
+        };
+      };
+
+      // Ordered list of blocks: the banner first, then every .pdf-block
+      const banner = wrapper.querySelector(".banner");
+      const blocks = [
+        ...(banner ? [banner] : []),
+        ...Array.from(wrapper.querySelectorAll(".pdf-block")),
+      ];
+
+      let cursorY = margin; // current vertical position on the page (mm)
+
+      for (let i = 0; i < blocks.length; i++) {
+        const el = blocks[i];
+        const block = await captureBlock(el);
+
+        // The banner spans the full page width (no side margins)
+        const isBanner = el === banner;
+        let drawW = isBanner ? pageW : contentW;
+        let drawH = isBanner
+          ? (block.hMm * pageW) / block.wMm
+          : block.hMm;
+        let drawX = isBanner ? 0 : margin;
+
+        // If a single block is taller than a full page, scale it down to fit
+        if (drawH > usableH) {
+          const ratio = usableH / drawH;
+          drawH = usableH;
+          drawW = drawW * ratio;
+          drawX = isBanner ? (pageW - drawW) / 2 : margin + (contentW - drawW) / 2;
+        }
+
+        // Not enough room left on the current page -> new page
+        const bottomLimit = pageH - margin;
+        if (cursorY + drawH > bottomLimit && cursorY > margin) {
+          pdf.addPage();
+          cursorY = margin;
+        }
+
+        // "keep with next": a table header alone at the bottom is pushed
+        // to the next page so it always sits above its first data row
+        if (el.classList && el.classList.contains("pdf-keep-with-next")) {
+          const next = blocks[i + 1];
+          if (next) {
+            const nextBlock = await captureBlock(next);
+            const nextH = Math.min(nextBlock.hMm, usableH);
+            if (cursorY + drawH + nextH > bottomLimit && cursorY > margin) {
+              pdf.addPage();
+              cursorY = margin;
+            }
+          }
+        }
+
+        const drawTop = isBanner ? cursorY : cursorY;
+        pdf.addImage(block.data, "JPEG", drawX, drawTop, drawW, drawH);
+        cursorY += drawH + (isBanner ? 4 : 2.5); // small gap between blocks
       }
 
       pdf.save(`${report.id}_${report.homeTeam.replace(/\s+/g, "_")}.pdf`);
@@ -1192,9 +1247,14 @@ h3 { font-family: 'Archivo Black', sans-serif; font-size: 16px; text-transform: 
 img { max-width: 100%; display: block; border: 1px solid #e7e5e4; }
 figure { background: white; border: 1px solid #e7e5e4; }
 figcaption { padding: 12px; font-size: 14px; border-top: 1px solid #e7e5e4; }
-table { width: 100%; background: white; border-collapse: collapse; }
+table { width: 100%; background: white; border-collapse: collapse; table-layout: fixed; }
+col.c-item { width: 46%; }
+col.c-source { width: 24%; }
+col.c-qty { width: 12%; }
+col.c-state { width: 18%; }
 th { background: #0c0a09; color: white; padding: 12px; text-align: left; font-family: 'JetBrains Mono', monospace; font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
-td { padding: 12px; border-bottom: 1px solid #e7e5e4; }
+td { padding: 12px; border-bottom: 1px solid #e7e5e4; word-wrap: break-word; }
+tr { background: white; }
 .tag { display: inline-block; padding: 2px 8px; font-family: 'JetBrains Mono', monospace; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; background: #ecfccb; color: #365314; }
 footer { margin-top: 40px; padding-top: 24px; border-top: 2px solid #0c0a09; display: flex; justify-content: space-between; }
 .mono { font-family: 'JetBrains Mono', monospace; font-size: 10px; text-transform: uppercase; letter-spacing: 1px; color: #78716c; }
@@ -1207,38 +1267,43 @@ footer { margin-top: 40px; padding-top: 24px; border-top: 2px solid #0c0a09; dis
 </div>
 <div class="content">
   <section>
-    <h2>01 — Synthèse</h2>
-    <div class="card">
+    <h2 class="pdf-block">01 — Synthèse</h2>
+    <div class="card pdf-block">
       <div class="mono">Statut</div>
       <div style="font-family:'Archivo Black';font-size:20px;margin-top:4px">${statusLabel}</div>
     </div>
-    ${report.synthesisNotes ? `<div class="card">${report.synthesisNotes.replace(/\n/g, "<br>")}</div>` : ""}
+    ${report.synthesisNotes ? `<div class="card pdf-block">${report.synthesisNotes.replace(/\n/g, "<br>")}</div>` : ""}
   </section>
 
   ${report.zones.some(z => z.photos.length) ? `<section>
-    <h2>02 — Preuves de visibilité (${photoCount} photos)</h2>
+    <h2 class="pdf-block">02 — Preuves de visibilité (${photoCount} photos)</h2>
     ${report.zones.filter(z => z.photos.length).map(z => `
-      <h3>Zone ${z.id} — ${z.name}</h3>
+      <h3 class="pdf-block">Zone ${z.id} — ${z.name}</h3>
       <div class="grid">
-        ${z.photos.map(p => `<figure><img src="${p.dataUrl}"/>${p.caption ? `<figcaption>${p.caption}</figcaption>` : ""}</figure>`).join("")}
+        ${z.photos.map(p => `<figure class="pdf-block"><img src="${p.dataUrl}"/>${p.caption ? `<figcaption>${p.caption}</figcaption>` : ""}</figure>`).join("")}
       </div>
     `).join("")}
   </section>` : ""}
 
   ${report.inventory.length ? `<section>
-    <h2>03 — Logistique & Production</h2>
+    <h2 class="pdf-block">03 — Logistique & Production</h2>
     <table>
-      <thead><tr><th>Élément</th><th>Provenance</th><th>Qté</th><th>État</th></tr></thead>
+      <colgroup>
+        <col class="c-item"><col class="c-source"><col class="c-qty"><col class="c-state">
+      </colgroup>
       <tbody>
-        ${report.inventory.map(i => `<tr><td><strong>${i.item}</strong></td><td>${i.source}</td><td><strong>${i.qty}</strong></td><td><span class="tag">${i.state}</span></td></tr>`).join("")}
+        <tr class="pdf-block pdf-keep-with-next">
+          <th>Élément</th><th>Provenance</th><th>Qté</th><th>État</th>
+        </tr>
+        ${report.inventory.map(i => `<tr class="pdf-block"><td><strong>${i.item}</strong></td><td>${i.source}</td><td><strong>${i.qty}</strong></td><td><span class="tag">${i.state}</span></td></tr>`).join("")}
       </tbody>
     </table>
   </section>` : ""}
 
   ${report.incidents.length ? `<section>
-    <h2>04 — Incidents & Maintenance</h2>
+    <h2 class="pdf-block">04 — Incidents & Maintenance</h2>
     ${report.incidents.map(inc => `
-      <div class="card amber">
+      <div class="card amber pdf-block">
         <div style="font-family:'Archivo Black';font-size:18px">${inc.object || "Incident"}</div>
         <div class="mono" style="margin:4px 0">Sévérité : ${inc.severity}</div>
         ${inc.problem ? `<p style="margin:8px 0">${inc.problem}</p>` : ""}
@@ -1248,7 +1313,7 @@ footer { margin-top: 40px; padding-top: 24px; border-top: 2px solid #0c0a09; dis
     `).join("")}
   </section>` : ""}
 
-  <footer>
+  <footer class="pdf-block">
     <div><div class="mono">Signature</div><div style="font-family:'Archivo Black';font-size:18px">${report.operator || "—"}</div></div>
     <div style="text-align:right"><div class="mono">Généré le</div><div class="mono">${formatDateTime(report.createdAt)}</div></div>
   </footer>
